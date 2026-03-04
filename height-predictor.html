@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>STATURE — Height Predictor</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:ital,wght@0,300;0,400;1,300&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0a0a0a;
+    --panel: #111111;
+    --border: #222222;
+    --accent: #c8f542;
+    --accent2: #f5c842;
+    --text: #f0f0f0;
+    --muted: #555;
+    --danger: #ff4444;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px);
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 32px;
+    border-bottom: 1px solid var(--border);
+    position: relative;
+  }
+
+  .logo {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 2.4rem;
+    letter-spacing: 0.15em;
+    color: var(--accent);
+    line-height: 1;
+  }
+
+  .logo span { color: var(--text); opacity: 0.3; }
+
+  .header-tag {
+    font-size: 0.65rem;
+    color: var(--muted);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    border: 1px solid var(--border);
+    padding: 4px 10px;
+  }
+
+  .status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--danger);
+    display: inline-block;
+    margin-right: 8px;
+    animation: blink 1.2s infinite;
+  }
+
+  .status-dot.active { background: var(--accent); animation: none; }
+  .status-dot.detecting { background: var(--accent2); animation: blink 0.6s infinite; }
+
+  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
+
+  main {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 0;
+    height: calc(100vh - 73px);
+  }
+
+  .camera-section {
+    position: relative;
+    background: #050505;
+    border-right: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  #videoElement { position: absolute; width: 100%; height: 100%; object-fit: cover; opacity: 0; }
+  #outputCanvas { position: absolute; width: 100%; height: 100%; object-fit: cover; }
+
+  .camera-overlay { position: absolute; inset: 0; pointer-events: none; }
+
+  .corner { position: absolute; width: 28px; height: 28px; border-color: var(--accent); border-style: solid; opacity: 0.7; }
+  .corner.tl { top: 16px; left: 16px; border-width: 2px 0 0 2px; }
+  .corner.tr { top: 16px; right: 16px; border-width: 2px 2px 0 0; }
+  .corner.bl { bottom: 16px; left: 16px; border-width: 0 0 2px 2px; }
+  .corner.br { bottom: 16px; right: 16px; border-width: 0 2px 2px 0; }
+
+  .scan-line {
+    position: absolute;
+    left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    opacity: 0;
+  }
+
+  @keyframes scan {
+    0% { top: 10%; opacity: 0; }
+    10% { opacity: 0.6; }
+    90% { opacity: 0.6; }
+    100% { top: 90%; opacity: 0; }
+  }
+
+  .camera-label {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.6rem;
+    letter-spacing: 0.3em;
+    color: var(--muted);
+    text-transform: uppercase;
+    background: rgba(0,0,0,0.6);
+    padding: 4px 12px;
+    border: 1px solid var(--border);
+  }
+
+  .start-prompt { position: absolute; text-align: center; z-index: 10; }
+  .start-prompt h2 { font-family: 'Bebas Neue', sans-serif; font-size: 3rem; letter-spacing: 0.1em; color: var(--text); opacity: 0.2; margin-bottom: 8px; }
+  .start-prompt p { font-size: 0.7rem; color: var(--muted); letter-spacing: 0.15em; }
+
+  .side-panel { display: flex; flex-direction: column; background: var(--panel); overflow-y: auto; }
+  .panel-section { padding: 24px; border-bottom: 1px solid var(--border); }
+  .panel-label { font-size: 0.6rem; letter-spacing: 0.25em; color: var(--muted); text-transform: uppercase; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+  .panel-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+  .height-display { text-align: center; padding: 32px 16px; }
+  .height-value { font-family: 'Bebas Neue', sans-serif; font-size: 6rem; line-height: 1; letter-spacing: -0.02em; color: var(--accent); transition: all 0.3s ease; text-shadow: 0 0 40px rgba(200, 245, 66, 0.3); }
+  .height-value.no-data { color: var(--muted); opacity: 0.4; }
+  .height-unit { font-size: 0.7rem; color: var(--muted); letter-spacing: 0.2em; margin-top: 4px; }
+  .height-imperial { font-family: 'Bebas Neue', sans-serif; font-size: 1.6rem; color: var(--text); opacity: 0.5; letter-spacing: 0.05em; margin-top: 8px; }
+
+  .confidence-bar { width: 100%; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; margin-top: 8px; }
+  .confidence-fill { height: 100%; background: linear-gradient(90deg, var(--accent2), var(--accent)); border-radius: 2px; transition: width 0.4s ease; width: 0%; }
+  .confidence-label { display: flex; justify-content: space-between; font-size: 0.6rem; color: var(--muted); margin-top: 6px; }
+
+  .calibration-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .cal-label { font-size: 0.65rem; color: var(--muted); flex: 1; }
+  
+  /* Select Styling */
+  .custom-select {
+    width: 100%;
+    background: #1a1a1a;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.7rem;
+    margin-bottom: 12px;
+    outline: none;
+  }
+
+  .unit-toggle { display: flex; border: 1px solid var(--border); overflow: hidden; }
+  .unit-btn { padding: 6px 14px; font-family: 'DM Mono', monospace; font-size: 0.65rem; letter-spacing: 0.1em; background: transparent; color: var(--muted); border: none; cursor: pointer; transition: all 0.2s; }
+  .unit-btn.active { background: var(--accent); color: var(--bg); font-weight: bold; }
+
+  input[type="range"] { -webkit-appearance: none; width: 100%; height: 3px; background: var(--border); outline: none; margin: 8px 0; }
+  input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; background: var(--accent); cursor: pointer; border-radius: 0; }
+  .range-labels { display: flex; justify-content: space-between; font-size: 0.55rem; color: var(--muted); }
+
+  .landmark-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .landmark-item { display: flex; align-items: center; gap: 8px; font-size: 0.6rem; color: var(--muted); padding: 6px 8px; border: 1px solid var(--border); transition: all 0.3s; }
+  .landmark-item.detected { border-color: rgba(200, 245, 66, 0.3); color: var(--accent); background: rgba(200, 245, 66, 0.04); }
+  .lm-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--border); flex-shrink: 0; transition: background 0.3s; }
+  .landmark-item.detected .lm-dot { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+
+  .start-btn { width: 100%; padding: 16px; font-family: 'Bebas Neue', sans-serif; font-size: 1.4rem; letter-spacing: 0.2em; background: var(--accent); color: var(--bg); border: none; cursor: pointer; transition: all 0.2s; margin-top: auto; }
+  .start-btn:hover { background: #d9ff55; transform: translateY(-1px); }
+  .start-btn:disabled { background: var(--border); color: var(--muted); cursor: not-allowed; }
+  .stop-btn { width: 100%; padding: 12px; font-family: 'Bebas Neue', sans-serif; font-size: 1rem; letter-spacing: 0.2em; background: transparent; color: var(--danger); border: 1px solid var(--danger); cursor: pointer; transition: all 0.2s; display: none; }
+
+  .btn-group { padding: 20px 24px; display: flex; flex-direction: column; gap: 8px; margin-top: auto; }
+
+  .tip-box { background: rgba(200, 245, 66, 0.05); border: 1px solid rgba(200, 245, 66, 0.1); padding: 12px; font-size: 0.6rem; color: var(--muted); line-height: 1.6; margin-top: 8px; }
+  .tip-box strong { color: var(--accent); display: block; margin-bottom: 4px; letter-spacing: 0.1em; }
+
+  .status-bar { position: fixed; bottom: 0; left: 0; right: 0; background: rgba(10,10,10,0.9); border-top: 1px solid var(--border); padding: 8px 24px; display: flex; align-items: center; gap: 24px; font-size: 0.6rem; color: var(--muted); letter-spacing: 0.1em; backdrop-filter: blur(8px); z-index: 100; }
+  .status-item { display: flex; align-items: center; gap: 6px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">STATURE<span>.</span></div>
+  <div class="header-tag">
+    <span class="status-dot" id="statusDot"></span>
+    <span id="statusText">OFFLINE</span>
+  </div>
+</header>
+
+<main>
+  <div class="camera-section">
+    <video id="videoElement" playsinline></video>
+    <canvas id="outputCanvas"></canvas>
+    <div class="camera-overlay">
+      <div class="corner tl"></div><div class="corner tr"></div>
+      <div class="corner bl"></div><div class="corner br"></div>
+      <div class="scan-line" id="scanLine"></div>
+    </div>
+    <div id="startPrompt" class="start-prompt">
+      <h2>NO SIGNAL</h2>
+      <p>SELECT CAMERA AND PRESS START</p>
+    </div>
+    <div class="camera-label">MEDIAPIPE POSE // REAL-TIME ANALYSIS</div>
+  </div>
+
+  <div class="side-panel">
+    <div class="height-display" style="border-bottom: 1px solid var(--border);">
+      <div class="panel-label">ESTIMATED HEIGHT</div>
+      <div class="height-value no-data" id="heightCm">---</div>
+      <div class="height-unit">CENTIMETERS</div>
+      <div class="height-imperial" id="heightFt">-- ' --"</div>
+      <div style="margin-top: 16px;">
+        <div class="confidence-bar"><div class="confidence-fill" id="confFill"></div></div>
+        <div class="confidence-label"><span>CONFIDENCE</span><span id="confPct">0%</span></div>
+      </div>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-label">HARDWARE SETUP</div>
+      <div class="cal-label">SELECT INPUT DEVICE</div>
+      <select id="cameraSelect" class="custom-select">
+        <option value="">Detecting cameras...</option>
+      </select>
+
+      <div class="calibration-row">
+        <span class="cal-label">DISPLAY UNIT</span>
+        <div class="unit-toggle">
+          <button class="unit-btn active" id="btnCm" onclick="setUnit('cm')">CM</button>
+          <button class="unit-btn" id="btnFt" onclick="setUnit('ft')">FT</button>
+        </div>
+      </div>
+
+      <div class="cal-label">REFERENCE SCALE FACTOR</div>
+      <input type="range" id="scaleSlider" min="0.6" max="1.4" step="0.01" value="1.0" oninput="updateScale(this.value)">
+      <div class="range-labels"><span>−40%</span><span id="scaleVal">1.00×</span><span>+40%</span></div>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-label">LANDMARK TRACKING</div>
+      <div class="landmark-grid">
+        <div class="landmark-item" id="lm-nose"><span class="lm-dot"></span>NOSE</div>
+        <div class="landmark-item" id="lm-shoulder"><span class="lm-dot"></span>SHOULDERS</div>
+        <div class="landmark-item" id="lm-hip"><span class="lm-dot"></span>HIPS</div>
+        <div class="landmark-item" id="lm-knee"><span class="lm-dot"></span>KNEES</div>
+        <div class="landmark-item" id="lm-ankle"><span class="lm-dot"></span>ANKLES</div>
+        <div class="landmark-item" id="lm-heel"><span class="lm-dot"></span>HEELS</div>
+      </div>
+    </div>
+
+    <div class="panel-section">
+      <div class="panel-label">SESSION STATS</div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+        <div><div style="font-size:0.55rem;color:var(--muted);letter-spacing:0.15em;margin-bottom:4px;">FRAMES</div><div style="font-family:'Bebas Neue',sans-serif;font-size:1.4rem;color:var(--text);" id="frameCount">0</div></div>
+        <div><div style="font-size:0.55rem;color:var(--muted);letter-spacing:0.15em;margin-bottom:4px;">DETECTIONS</div><div style="font-family:'Bebas Neue',sans-serif;font-size:1.4rem;color:var(--accent);" id="detCount">0</div></div>
+        <div><div style="font-size:0.55rem;color:var(--muted);letter-spacing:0.15em;margin-bottom:4px;">AVG HEIGHT</div><div style="font-family:'Bebas Neue',sans-serif;font-size:1.4rem;color:var(--text);" id="avgHeight">---</div></div>
+        <div><div style="font-size:0.55rem;color:var(--muted);letter-spacing:0.15em;margin-bottom:4px;">STABILITY</div><div style="font-family:'Bebas Neue',sans-serif;font-size:1.4rem;color:var(--text);" id="stability">---</div></div>
+      </div>
+    </div>
+
+    <div class="btn-group">
+      <button class="start-btn" id="startBtn" onclick="startCamera()">▶ START CAMERA</button>
+      <button class="stop-btn" id="stopBtn" onclick="stopCamera()">■ STOP</button>
+    </div>
+  </div>
+</main>
+
+<div class="status-bar">
+  <div class="status-item"><span id="sbStatus">STANDBY</span></div>
+  <div class="status-item" style="margin-left:auto;">FPS <span id="sbFps">--</span></div>
+  <div class="status-item">POSE <span id="sbPose">OFF</span></div>
+  <div class="status-item">MODEL <span style="color:var(--accent2)">MEDIAPIPE v0.9</span></div>
+</div>
+
+<script>
+let pose = null, animFrameId = null, isRunning = false;
+let scaleFactor = 1.0, displayUnit = 'cm', frameCount = 0, detectionCount = 0;
+let heightHistory = [], fpsHistory = [], lastFrameTime = Date.now();
+const TYPICAL_HEIGHT_CM = 170;
+
+const video = document.getElementById('videoElement'), canvas = document.getElementById('outputCanvas'), ctx = canvas.getContext('2d');
+const cameraSelect = document.getElementById('cameraSelect');
+
+// ─── Camera Management ───────────────────────────────────────────────────────
+async function initCameraList() {
+  try {
+    await navigator.mediaDevices.getUserMedia({ video: true }); // Request permission
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoDevices = devices.filter(d => d.kind === 'videoinput');
+    
+    cameraSelect.innerHTML = '';
+    videoDevices.forEach((device, i) => {
+      const option = document.createElement('option');
+      option.value = device.deviceId;
+      const label = device.label || `Camera ${i + 1}`;
+      option.text = label.toUpperCase();
+      // Auto-select front camera if found
+      if (label.toLowerCase().includes('front') || label.toLowerCase().includes('user')) option.selected = true;
+      cameraSelect.appendChild(option);
+    });
+  } catch (err) {
+    cameraSelect.innerHTML = '<option value="">ERROR: PERMISSION DENIED</option>';
+  }
+}
+
+initCameraList();
+
+// ─── Logic ───────────────────────────────────────────────────────────────────
+function cmToFtIn(cm) {
+  const totalIn = cm / 2.54, ft = Math.floor(totalIn / 12), inch = Math.round(totalIn % 12);
+  return `${ft}' ${inch}"`;
+}
+
+function setUnit(u) {
+  displayUnit = u;
+  document.getElementById('btnCm').classList.toggle('active', u === 'cm');
+  document.getElementById('btnFt').classList.toggle('active', u === 'ft');
+}
+
+function updateScale(v) {
+  scaleFactor = parseFloat(v);
+  document.getElementById('scaleVal').textContent = scaleFactor.toFixed(2) + '×';
+}
+
+function updateStatus(mode) {
+  const dot = document.getElementById('statusDot'), txt = document.getElementById('statusText');
+  dot.className = 'status-dot' + (mode !== 'offline' ? (mode === 'detecting' ? ' detecting' : ' active') : '');
+  txt.textContent = mode.toUpperCase();
+}
+
+function setLandmark(id, detected) {
+  const el = document.getElementById('lm-' + id);
+  if (el) el.classList.toggle('detected', detected);
+}
+
+// ─── Height Estimation ───────────────────────────────────────────────────────
+function estimateHeight(landmarks, canvasH) {
+  const get = (i) => landmarks[i], vis = (i) => landmarks[i]?.visibility ?? 0;
+  const nose = get(0), lSh = get(11), rSh = get(12), lHeel = get(29), rHeel = get(30), lAnk = get(27), rAnk = get(28);
+  const vT = 0.4;
+
+  const hasNose = vis(0) > vT, hasSh = vis(11) > vT && vis(12) > vT, hasHeel = vis(29) > vT || vis(30) > vT, hasAnk = vis(27) > vT || vis(28) > vT;
+
+  setLandmark('nose', hasNose); setLandmark('shoulder', hasSh);
+  setLandmark('hip', vis(23)>vT); setLandmark('knee', vis(25)>vT);
+  setLandmark('ankle', hasAnk); setLandmark('heel', hasHeel);
+
+  if (!hasNose || (!hasHeel && !hasAnk)) return null;
+
+  const headY = nose.y - (hasSh ? Math.abs(((lSh.y + rSh.y)/2) - nose.y) * 0.8 : 0.03);
+  const footY = hasHeel ? Math.max(vis(29)>vT?lHeel.y:0, vis(30)>vT?rHeel.y:0) : Math.max(vis(27)>vT?lAnk.y:0, vis(28)>vT?rAnk.y:0);
+
+  const span = footY - headY;
+  if (span < 0.1) return null;
+
+  const raw = (span / 0.72) * TYPICAL_HEIGHT_CM;
+  const confidence = Math.min((vis(0)+vis(11)+vis(12)+vis(23)+vis(24))/5 * (hasHeel?1:0.8), 1.0);
+
+  return { heightCm: raw * scaleFactor, confidence, headY, footY };
+}
+
+// ─── Graphics ────────────────────────────────────────────────────────────────
+function drawSkeleton(landmarks, w, h) {
+  const conn = [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[27,29],[24,26],[26,28],[28,30]];
+  ctx.strokeStyle = 'rgba(200, 245, 66, 0.6)'; ctx.lineWidth = 2;
+  conn.forEach(([a, b]) => {
+    if ((landmarks[a]?.visibility??0) > 0.3 && (landmarks[b]?.visibility??0) > 0.3) {
+      ctx.beginPath(); ctx.moveTo(landmarks[a].x * w, landmarks[a].y * h); ctx.lineTo(landmarks[b].x * w, landmarks[b].y * h); ctx.stroke();
+    }
+  });
+}
+
+function onResults(results) {
+  const now = Date.now(); fpsHistory.push(1000 / (now - lastFrameTime)); lastFrameTime = now;
+  if (fpsHistory.length > 20) fpsHistory.shift();
+  document.getElementById('sbFps').textContent = Math.round(fpsHistory.reduce((a,b)=>a+b,0)/fpsHistory.length);
+  frameCount++; document.getElementById('frameCount').textContent = frameCount;
+
+  canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0,0,W,H);
+  ctx.save(); ctx.translate(W, 0); ctx.scale(-1, 1); ctx.drawImage(results.image, 0, 0, W, H); ctx.restore();
+
+  if (results.poseLandmarks) {
+    const mirrored = results.poseLandmarks.map(lm => ({ ...lm, x: 1 - lm.x }));
+    drawSkeleton(mirrored, W, H);
+    const est = estimateHeight(mirrored, H);
+
+    if (est && est.confidence > 0.3) {
+      detectionCount++; document.getElementById('detCount').textContent = detectionCount;
+      heightHistory.push(est.heightCm); if (heightHistory.length > 30) heightHistory.shift();
+      const avg = heightHistory.reduce((a,b)=>a+b,0)/heightHistory.length;
+      
+      document.getElementById('heightCm').textContent = displayUnit === 'cm' ? Math.round(avg) : cmToFtIn(avg);
+      document.getElementById('heightCm').classList.remove('no-data');
+      document.getElementById('heightFt').textContent = displayUnit === 'cm' ? cmToFtIn(avg) : `${Math.round(avg)} cm`;
+      
+      const conf = Math.round(est.confidence * 100);
+      document.getElementById('confFill').style.width = conf + '%';
+      document.getElementById('confPct').textContent = conf + '%';
+      document.getElementById('avgHeight').textContent = Math.round(avg) + (displayUnit === 'cm' ? 'cm' : '"');
+      updateStatus('detecting');
+    }
+  }
+}
+
+// ─── Start/Stop ──────────────────────────────────────────────────────────────
+async function startCamera() {
+  const deviceId = cameraSelect.value;
+  document.getElementById('startBtn').disabled = true;
+  document.getElementById('startBtn').textContent = 'INITIALIZING...';
+
+  try {
+    pose = new Pose({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}` });
+    pose.setOptions({ modelComplexity: 1, smoothLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+    pose.onResults(onResults);
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'user' }
+    });
+
+    video.srcObject = stream;
+    await video.play();
+    isRunning = true;
+    document.getElementById('startPrompt').style.display = 'none';
+    document.getElementById('startBtn').style.display = 'none';
+    document.getElementById('stopBtn').style.display = 'block';
+    document.getElementById('scanLine').style.animation = 'scan 3s ease-in-out infinite';
+    updateStatus('active');
+
+    const pump = async () => {
+      if (!isRunning) return;
+      if (video.readyState >= 2) await pose.send({ image: video });
+      animFrameId = requestAnimationFrame(pump);
+    };
+    pump();
+  } catch (err) {
+    alert("Camera Error: " + err.message);
+    stopCamera();
+  }
+}
+
+function stopCamera() {
+  isRunning = false; cancelAnimationFrame(animFrameId);
+  if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
+  if (pose) { pose.close(); pose = null; }
+  document.getElementById('startBtn').style.display = '';
+  document.getElementById('startBtn').disabled = false;
+  document.getElementById('startBtn').textContent = '▶ START CAMERA';
+  document.getElementById('stopBtn').style.display = 'none';
+  document.getElementById('startPrompt').style.display = '';
+  updateStatus('offline');
+}
+</script>
+</body>
+</html>
